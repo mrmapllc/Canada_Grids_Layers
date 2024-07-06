@@ -1,0 +1,175 @@
+require([
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/layers/GeoJSONLayer",
+  "esri/widgets/Editor",
+  "esri/widgets/Search",
+  "esri/geometry/Extent",
+  "esri/renderers/SimpleRenderer",
+  "esri/symbols/SimpleFillSymbol",
+  "esri/symbols/TextSymbol",
+  "esri/layers/support/LabelClass"
+], function(Map, MapView, GeoJSONLayer, Editor, Search, Extent, SimpleRenderer, SimpleFillSymbol, TextSymbol, LabelClass) {
+
+  const geojsonUrl = "https://raw.githubusercontent.com/mrmapllc/Canada_Grids_Layers/main/grids.geojson"; // Your GeoJSON URL
+  const updateUrl = "/update-geojson"; // Endpoint to handle GitHub updates
+
+  // Create the GeoJSONLayer
+  const geojsonLayer = new GeoJSONLayer({
+    url: geojsonUrl,
+    outFields: ["*"],
+    popupTemplate: {
+      title: "{Grid}",
+      content: getContent
+    },
+    renderer: new SimpleRenderer({
+      symbol: new SimpleFillSymbol({
+        color: [0, 0, 0, 0], // 100% transparent fill
+        outline: {
+          color: [0, 0, 0, 1], // Black outline
+          width: 1
+        }
+      })
+    }),
+    labelingInfo: [new LabelClass({
+      symbol: new TextSymbol({
+        color: "black",
+        haloColor: "white",
+        haloSize: "1px",
+        font: {
+          size: 10,
+          family: "sans-serif"
+        }
+      }),
+      labelPlacement: "center-center",
+      labelExpressionInfo: {
+        expression: "$feature.Grid"
+      }
+    })]
+  });
+
+  // Create the Map
+  const map = new Map({
+    basemap: "streets-vector", // Use streets-vector basemap
+    layers: [geojsonLayer]
+  });
+
+  // Set the extent to Canada
+  const canadaExtent = new Extent({
+    xmin: -141, // Westernmost longitude
+    ymin: 41, // Southernmost latitude
+    xmax: -52, // Easternmost longitude
+    ymax: 83 // Northernmost latitude
+  });
+
+  // Create the MapView
+  const view = new MapView({
+    container: "viewDiv",
+    map: map,
+    extent: canadaExtent // Set the initial extent to Canada
+  });
+
+  // Add the Editor widget
+  const editor = new Editor({
+    view: view
+  });
+
+  view.ui.add(editor, "top-right");
+
+  // Create the Search widget
+  const searchWidget = new Search({
+    view: view,
+    sources: [
+      {
+        layer: geojsonLayer,
+        searchFields: ["Grid"],
+        displayField: "Grid",
+        exactMatch: false,
+        outFields: ["*"],
+        name: "Grid Search",
+        placeholder: "Search by Grid"
+      },
+      {
+        // Use default ArcGIS World Geocoding Service
+        locator: {
+          url: "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer"
+        },
+        singleLineFieldName: "SingleLine",
+        name: "Address Search",
+        placeholder: "Search by Address"
+      }
+    ]
+  });
+
+  // Ensure the search widget is created correctly
+  console.log("Search widget created:", searchWidget);
+
+  view.ui.add(searchWidget, {
+    position: "top-left",
+    index: 0
+  });
+
+  geojsonLayer.on("edits", function(event) {
+    const updatedFeatures = event.edits.updateFeatures;
+    updateGeoJSON(updatedFeatures);
+  });
+
+  view.on("click", function(event) {
+    view.hitTest(event).then(function(response) {
+      const results = response.results.filter(function(result) {
+        return result.graphic.layer === geojsonLayer;
+      });
+
+      if (results.length > 0) {
+        const graphic = results[0].graphic;
+        view.popup.open({
+          title: graphic.attributes.Grid || "No Grid Name", // Use the "Grid" attribute as the title
+          location: event.mapPoint,
+          content: getContent(graphic)
+        });
+      }
+    });
+  });
+
+  function getContent(graphic) {
+    let content = "<table>";
+    for (let key in graphic.attributes) {
+      if (graphic.attributes.hasOwnProperty(key)) {
+        content += `<tr><th>${key}</th><td>${graphic.attributes[key]}</td></tr>`;
+      }
+    }
+    content += "</table>";
+    return content;
+  }
+
+  function updateGeoJSON(features) {
+    fetch(geojsonUrl)
+      .then(response => response.json())
+      .then(data => {
+        features.forEach(feature => {
+          const index = data.features.findIndex(f => f.id === feature.id);
+          if (index !== -1) {
+            data.features[index].properties = feature.attributes;
+          }
+        });
+
+        saveGeoJSONToGitHub(data);
+      })
+      .catch(error => console.error("Error updating GeoJSON:", error));
+  }
+
+  function saveGeoJSONToGitHub(data) {
+    fetch(updateUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+      console.log("Successfully updated GeoJSON on GitHub", result);
+    })
+    .catch(error => console.error("Error updating GeoJSON on GitHub:", error));
+  }
+});
